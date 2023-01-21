@@ -239,7 +239,7 @@ func main() {
 	var toSort [][]byte
 
 	// start sending data that does not belong to my server
-	kept := make(chan []byte, 10000)
+	kept := make(chan []byte, 100000)
 	go sender(byteArray, serverId, &allSent, scs, kept)
 
 
