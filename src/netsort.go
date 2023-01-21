@@ -15,10 +15,6 @@ import (
 	"math"
 )
 
-
-const SERVER_TYPE = "tcp"
-
-
 type ServerConfigs struct {
 	Servers []struct {
 		ServerId int    `yaml:"serverId"`
@@ -32,7 +28,6 @@ type Server struct {
 	Host     string
 	Port     string
 }
-
 
 func readServerConfigs(configPath string) map[int]Server {
 	f, err := ioutil.ReadFile(configPath)
@@ -53,9 +48,29 @@ func readServerConfigs(configPath string) map[int]Server {
 	return serverMap
 }
 
+func readInputFile(inputFilePath string) [][]byte{
+	inputFp, _ := os.Open(inputFilePath)
 
+	// read the file and store byte arrays 
+	byteArray := make([][]byte, 0)
 
-func handler(conn net.Conn, recvd chan []byte) {
+	for {
+		keyValue := make([]byte, 100)
+
+		_, err := io.ReadFull(inputFp, keyValue)
+
+		if err == io.EOF {
+			break
+		}
+		byteArray = append(byteArray, keyValue)
+	}
+
+	inputFp.Close()
+
+	return byteArray
+}
+
+func handler(conn net.Conn, buffer chan []byte) {
 
 	for {
 		tmp := make([]byte, 101)  
@@ -67,15 +82,14 @@ func handler(conn net.Conn, recvd chan []byte) {
             break
     	}
 
-    	recvd <- tmp[:n]
+    	buffer <- tmp[:n]
 
 	}
 }
 
+func reciever(myServerId int, buffer chan []byte, serverMap map[int]Server) {
 
-func listener(myServerId int, recvd chan []byte, serverMap map[int]Server) {
-
-	l, _ := net.Listen(SERVER_TYPE,  serverMap[myServerId].Host +":"+ serverMap[myServerId].Port)
+	l, _ := net.Listen("tcp", serverMap[myServerId].Host +":"+ serverMap[myServerId].Port)
 
 	for {
 
@@ -85,12 +99,11 @@ func listener(myServerId int, recvd chan []byte, serverMap map[int]Server) {
 	            return
 	        }
 
-	        go handler(conn, recvd)
+	        go handler(conn, buffer)
 	}
 }
         
-
-func sender(array [][]byte, myServerId int, allSent *bool, serverMap map[int]Server, recvd chan []byte) {
+func sender(array [][]byte, myServerId int, allSent *bool, serverMap map[int]Server, buffer chan []byte) {
 
 	allConnections := make(map[int]net.Conn)
 
@@ -99,7 +112,7 @@ func sender(array [][]byte, myServerId int, allSent *bool, serverMap map[int]Ser
 		if id == myServerId {
 			continue
 		}
-		connection, err := net.Dial(SERVER_TYPE, val.Host +":"+ val.Port)
+		connection, err := net.Dial("tcp", val.Host +":"+ val.Port)
 		if err != nil {
                 panic(err)
         }
@@ -124,10 +137,9 @@ func sender(array [][]byte, myServerId int, allSent *bool, serverMap map[int]Ser
 
 		} else {
 
-			recvd <- val
+			buffer <- val
 		}
 	}
-
 
 	// prepare stream complete signal
 	signal := []byte{1, byte(myServerId)}
@@ -145,34 +157,8 @@ func sender(array [][]byte, myServerId int, allSent *bool, serverMap map[int]Ser
 		allConnections[id].Write(signal)
 	}
 
-	// kept <- signal 
 	*allSent = true
-
 }
-
-
-func readInputFile(inputFilePath string) [][]byte{
-	inputFp, _ := os.Open(inputFilePath)
-
-	// read the file and store byte arrays 
-	byteArray := make([][]byte, 0)
-
-	for {
-		keyValue := make([]byte, 100)
-
-		_, err := io.ReadFull(inputFp, keyValue)
-
-		if err == io.EOF {
-			break
-		}
-		byteArray = append(byteArray, keyValue)
-	}
-
-	inputFp.Close()
-
-	return byteArray
-}
-
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -193,38 +179,32 @@ func main() {
 	// read input binary file
 	byteArray := readInputFile(os.Args[2])
 
-	recvd := make(chan []byte)
+	buffer := make(chan []byte)
 	var counter int
 
-	// start listening to other nodes and accept records and store data into recvd
-	go listener(serverId, recvd, scs)
-
+	// start listening to other nodes and accept records and store data into buffer
+	go reciever(serverId, buffer, scs)
 
 	time.Sleep(2 * time.Second)
 
-
-	allSent := false
-	var toSort [][]byte
-
 	// start sending data that does not belong to my server
-	// kept := make(chan []byte, 10000)
-	go sender(byteArray, serverId, &allSent, scs, recvd)
+	allSent := false
+	go sender(byteArray, serverId, &allSent, scs, buffer)
 
-
+	var toSort [][]byte
 	for {
 
 		var val []byte 
 
-		val  = <- recvd
+		val  = <- buffer
 
 		if val[0] == byte(1) {
     		counter += 1
     	} else {
 			toSort = append(toSort, val[1:])
-
     	}
 
-    	// break when all nodes have sent their data
+    	// break when all nodes have sent their data and current node has sent its data
     	if counter == len(scs) - 1 && allSent {
     		break
     	}
