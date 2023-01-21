@@ -55,7 +55,7 @@ func readServerConfigs(configPath string) map[int]Server {
 
 
 
-func handler(conn net.Conn, recvd *[][]byte, counter *int, waitUntil int) {
+func handler(conn net.Conn, recvd chan []byte) {
 
 	for {
 		tmp := make([]byte, 101)  
@@ -64,26 +64,40 @@ func handler(conn net.Conn, recvd *[][]byte, counter *int, waitUntil int) {
             if err != io.EOF {
                 fmt.Println("read error:", err)
             }
+            // fmt.Println(err)
             break
     	}
 
-    	// if the first byte of the record is 1 then one clien tis done sedning
-    	if tmp[0] == byte(1) {
-    		*counter += 1
-    		continue
-    	} else {
-        	// only store the bytes other than the stream_complete byte
-        	*recvd = append(*recvd, tmp[1:n])
-    	}
+    	recvd <- tmp[:n]
+// 
+    	// *tester+=1
 
-    	if *counter == waitUntil {
-    		return
-    	}
+    	// fmt.Println("z", len(tmp))
+    	// if the first byte of the record is 1 then one clien tis done sedning
+    	// if tmp[0] == byte(1) {
+    	// 	*counter += 1
+
+    	// 	// if sid == 5{
+    	// 	// 	fmt.Println(tmp)
+
+    	// 	// }
+    	// 	// continue
+    	// } else {
+        // 	// only store the bytes other than the stream_complete byte
+        // 	// *tester2 += 1 
+
+        	
+        // 	// *tmpbuf = append(*tmpbuf, tmp[1:n])
+    	// }
+
+    	// if *counter == waitUntil {
+    	// 	return
+    	// }
 	}
 }
 
 
-func listener(myServerId int, recvd *[][]byte, counter *int, serverMap map[int]Server) {
+func listener(myServerId int, recvd chan []byte, serverMap map[int]Server) {
 
 	l, _ := net.Listen(SERVER_TYPE,  serverMap[myServerId].Host +":"+ serverMap[myServerId].Port)
 
@@ -96,13 +110,15 @@ func listener(myServerId int, recvd *[][]byte, counter *int, serverMap map[int]S
 	        }
 
 	        // number of clients that are going to send information
-	       	waitUntil := len(serverMap) - 1
-	        go handler(conn, recvd, counter, waitUntil)
+	       	// waitUntil := len(serverMap) - 1
+	       	// var tmpbuf [][]byte
+	        go handler(conn, recvd)
+	        // *recvd = append(*recvd, tmpbuf...)
 	}
 }
         
 
-func sender(array [][]byte, myServerId int, allSent *bool, serverMap map[int]Server, kept *[][]byte) {
+func sender(array [][]byte, myServerId int, allSent *bool, serverMap map[int]Server, kept chan []byte) {
 
 	allConnections := make(map[int]net.Conn)
 
@@ -126,23 +142,25 @@ func sender(array [][]byte, myServerId int, allSent *bool, serverMap map[int]Ser
 	for _, val := range array {
 
 		belongsToServer := int(val[0] >> (8 - partitioningBits))
+		stream := []byte{0}
+		val = append(stream, val...)
 
 		if belongsToServer != myServerId {
-			fmt.Println("sending to", belongsToServer)
+			// fmt.Println("sending to", belongsToServer)
 
 
-			stream := []byte{0}
-			val = append(stream, val...)
+			
+			// fmt.Println(len(val))
 			allConnections[belongsToServer].Write(val)
 		} else {
-			*kept = append(*kept, val)
+			kept <- val
 		}
 	}
 
 
 	// prepare stream complete signal
-	signal := []byte{}
-	for i := 0; i <= 100; i++ {
+	signal := []byte{1, byte(myServerId)}
+	for i := 0; i <= 98; i++ {
 		signal = append(signal, 1)
 	}
 
@@ -156,6 +174,7 @@ func sender(array [][]byte, myServerId int, allSent *bool, serverMap map[int]Ser
 		allConnections[id].Write(signal)
 	}
 
+	kept <- signal 
 	*allSent = true
 
 }
@@ -203,40 +222,100 @@ func main() {
 
 	byteArray := readInputFile(os.Args[2])
 
-	var recvd [][]byte
+	recvd := make(chan []byte)
 	var counter int
 
+	// var tester int
+	// var tester2 int
+
 	// start listening to other nodes and accept records and store data into recvd
-	go listener(serverId, &recvd, &counter, scs)
+	go listener(serverId, recvd, scs)
 
 
 	time.Sleep(2 * time.Second)
 
 
 	allSent := false
-	var kept [][]byte
+	var toSort [][]byte
 
 	// start sending data that does not belong to my server
-	go sender(byteArray, serverId, &allSent, scs, &kept)
+	kept := make(chan []byte, 10000)
+	go sender(byteArray, serverId, &allSent, scs, kept)
 
 
-	// wait until all data has been sent and all data has been recieved
+	// var tmpbuf [][]byte
 	for {
-		if counter == len(scs) - 1 && allSent {
-			kept = append(kept, recvd...)
-			break
-		}
+		// if serverId == 1 {
+    	// 	fmt.Println(val)
+
+    	// 	}
+		var val []byte 
+
+		val  = <- recvd
+
+		// if serverId == 1 {
+    	// 	fmt.Println(val)
+
+    	// 	}
+
+		if val[0] == byte(1) {
+    		counter += 1
+
+    		// if serverId == 1 {
+    		// fmt.Println(counter)
+
+    		// }
+
+    	} else {
+			toSort = append(toSort, val[1:])
+			// if serverId == 1 {
+    		// // fmt.Println("added")
+    			
+    		// }
+    	}
+
+
+    	if counter == len(scs) - 1 {
+    		break
+    	}
 	}
 
 
+	fmt.Println("items recieved", len(toSort))
+
+	// wait until all data has been sent and all data has been recieved
+	// fmt.Println(serverId, len(kept), len(recvd))
+	for {
+
+				var val []byte 
+
+				val  = <- kept
+
+				if val[0] == byte(1) {
+					// fmt.Println(serverId, val)
+					break
+				}
+
+				toSort = append(toSort, val[1:])
+
+			}
+	fmt.Println(serverId, len(kept), len(recvd))
+	// fmt.Println(len(kept))
+
+
+
+	// time.Sleep(20 * time.Second)
+
 	// perform the sorting
-	sort.Slice(kept, func(i, j int) bool {
+
+
+	sort.Slice(toSort, func(i, j int) bool {
 
 		x := new(big.Int)
-		x.SetBytes(kept[i][:10])
+		x.SetBytes(toSort[i][:10])
 
 		y := new(big.Int)
-		y.SetBytes(kept[j][:10])
+		y.SetBytes(toSort[j][:10])
 
 		return x.Cmp(y) != 1
 	}) 
@@ -247,7 +326,7 @@ func main() {
 	outputFp, _ := os.Create(outputFilePath)
 	
 
-	for _, record := range kept {
+	for _, record := range toSort {
 		outputFp.Write(record)
 	}
 	outputFp.Close()
